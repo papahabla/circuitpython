@@ -24,18 +24,20 @@
  * THE SOFTWARE.
  */
 
-#ifndef __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIO_BUS_IO_AUDIOOUT_H__
-#define __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIO_BUS_IO_AUDIOOUT_H__
+#ifndef __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIOBUSIO_AUDIOOUT_H__
+#define __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIOBUSIO_AUDIOOUT_H__
 
-#include "common-hal/audio_bus_io/AudioOut.h"
+#include "common-hal/audiobusio/PDMIn.h"
 #include "common-hal/microcontroller/Pin.h"
 #include "extmod/vfs_fat_file.h"
 
-extern const mp_obj_type_t audio_bus_io_pdmin_type;
+extern const mp_obj_type_t audiobusio_pdmin_type;
 
-void common_hal_audio_bus_io_pdmin_construct(audio_bus_io_pdmin_obj_t* self, const mcu_pin_obj_t* pin);
-void common_hal_audio_bus_io_pdmin_deinit(audio_bus_io_pdmin_obj_t* self);
-void common_hal_audio_bus_io_pdmin_record_to_buffer(audio_bus_io_pdmin_obj_t* self, uint8_t* buffer, uint8_t length);
+void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
+    const mcu_pin_obj_t* clock_pin, const mcu_pin_obj_t* data_pin,
+    uint32_t frequency, uint8_t bit_depth, bool mono, uint8_t oversample);
+void common_hal_audiobusio_pdmin_deinit(audiobusio_pdmin_obj_t* self);
+uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* self, uint8_t* buffer, uint32_t length);
 // TODO(tannewt): Add record to file
 
-#endif // __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIO_BUS_IO_AUDIOOUT_H__
+#endif // __MICROPY_INCLUDED_SHARED_BINDINGS_AUDIOBUSIO_AUDIOOUT_H__

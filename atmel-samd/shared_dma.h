@@ -33,9 +33,14 @@ extern struct dma_resource audio_dma;
 extern struct dma_resource general_dma_tx;
 extern struct dma_resource general_dma_rx;
 
+volatile bool audio_dma_in_use;
+
 void init_shared_dma(void);
 
 enum status_code shared_dma_write(Sercom* sercom, const uint8_t* buffer, uint32_t length);
 enum status_code shared_dma_read(Sercom* sercom, uint8_t* buffer, uint32_t length, uint8_t tx);
+
+// Allocate a counter to track how far along we are in a DMA double buffer.
+bool allocate_block_counter(void);
 
 #endif  // __MICROPY_INCLUDED_ATMEL_SAMD_SHARED_DMA_H__

@@ -30,17 +30,17 @@
 #include "py/runtime.h"
 
 #include "shared-bindings/microcontroller/Pin.h"
-#include "shared-bindings/audio_bus_io/__init__.h"
-#include "shared-bindings/audio_bus_io/AudioOut.h"
+#include "shared-bindings/audiobusio/__init__.h"
+#include "shared-bindings/audiobusio/PDMIn.h"
 
-//| :mod:`audio_bus_io` --- Support for audio input and output over digital bus
+//| :mod:`audiobusio` --- Support for audio input and output over digital bus
 //| =================================================
 //|
-//| .. module:: audio_bus_io
+//| .. module:: audiobusio
 //|   :synopsis: Support for audio input and output over digital bus
 //|   :platform: SAMD21
 //|
-//| The `audio_bus_io` module contains classes to provide access to audio IO
+//| The `audiobusio` module contains classes to provide access to audio IO
 //| over digital buses. These protocols are used to communicate audio to other
 //| chips in the same circuit. It doesn't include audio interconnect protocols
 //| such as S/PDIF.
@@ -57,14 +57,14 @@
 //| context manager.
 //|
 
-STATIC const mp_rom_map_elem_t audio_bus_io_module_globals_table[] = {
-    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audio_bus_io) },
-    { MP_ROM_QSTR(MP_QSTR_PDMIn), MP_ROM_PTR(&audio_bus_io_pdmin_type) },
+STATIC const mp_rom_map_elem_t audiobusio_module_globals_table[] = {
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_audiobusio) },
+    { MP_ROM_QSTR(MP_QSTR_PDMIn), MP_ROM_PTR(&audiobusio_pdmin_type) },
 };
 
-STATIC MP_DEFINE_CONST_DICT(audio_bus_io_module_globals, audio_bus_io_module_globals_table);
+STATIC MP_DEFINE_CONST_DICT(audiobusio_module_globals, audiobusio_module_globals_table);
 
-const mp_obj_module_t audio_bus_io_module = {
+const mp_obj_module_t audiobusio_module = {
     .base = { &mp_type_module },
-    .globals = (mp_obj_dict_t*)&audio_bus_io_module_globals,
+    .globals = (mp_obj_dict_t*)&audiobusio_module_globals,
 };
