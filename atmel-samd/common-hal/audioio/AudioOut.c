@@ -103,6 +103,7 @@ void audioout_reset(void) {
 void audioout_background(void) {
     if (MP_STATE_VM(audiodma_block_counter) != NULL &&
             active_audioout != NULL &&
+            active_audioout->second_buffer != NULL &&
             active_audioout->last_loaded_block < tc_get_count_value(MP_STATE_VM(audiodma_block_counter))) {
         uint8_t* buffer;
         if (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) % 2 == 1) {
@@ -286,6 +287,7 @@ void common_hal_audioio_audioout_construct_from_buffer(audioio_audioout_obj_t* s
 
     self->buffer = (uint8_t*) buffer;
     self->second_buffer = NULL;
+    self->bytes_per_sample = bytes_per_sample;
     self->len = len;
     self->frequency = 8000;
 }

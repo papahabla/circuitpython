@@ -87,7 +87,7 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
         mp_raise_RuntimeError("Unable to allocate audio DMA block counter.");
     }
 
-    if (frequency != 8000 || bit_depth != 8 || !mono || oversample != 64) {
+    if (frequency != 16000 || bit_depth != 8 || !mono || oversample != 64) {
         mp_raise_NotImplementedError("");
     }
 
@@ -105,7 +105,7 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
     config_clock_unit.clock.mck_out_enable = false;
 
     config_clock_unit.clock.sck_src = I2S_SERIAL_CLOCK_SOURCE_MCKDIV;
-    config_clock_unit.clock.sck_div = 15;
+    config_clock_unit.clock.sck_div = 7;
 
     config_clock_unit.frame.number_slots = 2;
     config_clock_unit.frame.slot_size = I2S_SLOT_SIZE_32_BIT;

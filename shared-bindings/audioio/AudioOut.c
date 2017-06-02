@@ -63,7 +63,7 @@
 //|
 //|     # Generate one period of sine wav.
 //|     length = 8000 // 440
-//|     sine_wave = array.array("h", [0] * length)
+//|     sine_wave = array.array("H", [0] * length)
 //|     for i in range(length):
 //|         sine_wave[i] = int(math.sin(math.pi * 2 * i / 18) * (2 ** 15))
 //|
@@ -108,10 +108,10 @@ STATIC mp_obj_t audioio_audioout_make_new(const mp_obj_type_t *type, size_t n_ar
         common_hal_audioio_audioout_construct_from_file(self, pin, MP_OBJ_TO_PTR(args[1]));
     } else if (mp_get_buffer(args[1], &bufinfo, MP_BUFFER_READ)) {
         uint8_t bytes_per_sample = 1;
-        if (bufinfo.typecode == 'h') {
+        if (bufinfo.typecode == 'H') {
             bytes_per_sample = 2;
         } else if (bufinfo.typecode != 'B' && bufinfo.typecode != BYTEARRAY_TYPECODE) {
-            mp_raise_ValueError("sample_source buffer must be a bytearray or array of type 'h' or 'B'");
+            mp_raise_ValueError("sample_source buffer must be a bytearray or array of type 'H' or 'B'");
         }
 
         common_hal_audioio_audioout_construct_from_buffer(self, pin, ((uint16_t*)bufinfo.buf), bufinfo.len, bytes_per_sample);
