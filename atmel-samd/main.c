@@ -26,6 +26,7 @@
 
 #include "common-hal/analogio/AnalogIn.h"
 #include "common-hal/audioio/AudioOut.h"
+#include "common-hal/audiobusio/PDMIn.h"
 #include "common-hal/pulseio/PulseIn.h"
 #include "common-hal/pulseio/PulseOut.h"
 #include "common-hal/pulseio/PWMOut.h"
@@ -159,13 +160,16 @@ void reset_samd21(void) {
     }
 
 #ifdef EXPRESS_BOARD
+    audioout_reset();
     touchin_reset();
+    pdmin_reset();
+    pulsein_reset();
+    pulseout_reset();
+    pwmout_reset();
 #endif
 
     analogin_reset();
 
-    pulsein_reset();
-    pulseout_reset();
 
     // Wait for the DAC to sync then reset.
     while (DAC->STATUS.reg & DAC_STATUS_SYNCBUSY) {}
@@ -173,8 +177,6 @@ void reset_samd21(void) {
 
     reset_all_pins();
 
-    audioout_reset();
-    pwmout_reset();
 
     usb_hid_reset();
 

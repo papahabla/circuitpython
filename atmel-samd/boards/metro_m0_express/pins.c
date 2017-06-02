@@ -30,5 +30,7 @@ STATIC const mp_map_elem_t board_global_dict_table[] = {
   { MP_OBJ_NEW_QSTR(MP_QSTR_MOSI), (mp_obj_t)&pin_PB10 },
   { MP_OBJ_NEW_QSTR(MP_QSTR_MISO), (mp_obj_t)&pin_PA12 },
   { MP_OBJ_NEW_QSTR(MP_QSTR_FLASH_CS),   (mp_obj_t)&pin_PA13 },
+  { MP_OBJ_NEW_QSTR(MP_QSTR_MICROPHONE_CLOCK), (mp_obj_t)&pin_PA10 },
+  { MP_OBJ_NEW_QSTR(MP_QSTR_MICROPHONE_DATA), (mp_obj_t)&pin_PA08 },
 };
 MP_DEFINE_CONST_DICT(board_module_globals, board_global_dict_table);

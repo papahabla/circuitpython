@@ -42,5 +42,6 @@ enum status_code shared_dma_read(Sercom* sercom, uint8_t* buffer, uint32_t lengt
 
 // Allocate a counter to track how far along we are in a DMA double buffer.
 bool allocate_block_counter(void);
+void switch_audiodma_trigger(uint8_t trigger_dmac_id);
 
 #endif  // __MICROPY_INCLUDED_ATMEL_SAMD_SHARED_DMA_H__

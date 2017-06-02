@@ -28,6 +28,7 @@
 #define __MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_AUDIOBUSIO_AUDIOOUT_H__
 
 #include "common-hal/microcontroller/Pin.h"
+#include "asf/sam0/drivers/i2s/i2s.h"
 #include "asf/sam0/drivers/tc/tc.h"
 
 #include "extmod/vfs_fat_file.h"
@@ -39,6 +40,8 @@ typedef struct {
     const mcu_pin_obj_t *data_pin;
     uint32_t frequency;
     struct i2s_module i2s_instance;
+    uint8_t serializer;
+    uint8_t clock_unit;
 } audiobusio_pdmin_obj_t;
 
 void pdmin_reset(void);

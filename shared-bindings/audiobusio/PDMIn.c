@@ -68,7 +68,7 @@ STATIC mp_obj_t audiobusio_pdmin_make_new(const mp_obj_type_t *type, size_t n_ar
     const mcu_pin_obj_t *clock_pin = MP_OBJ_TO_PTR(clock_pin_obj);
     assert_pin_free(clock_pin);
 
-    mp_obj_t data_pin_obj = args[0];
+    mp_obj_t data_pin_obj = args[1];
     assert_pin(data_pin_obj, false);
     const mcu_pin_obj_t *data_pin = MP_OBJ_TO_PTR(data_pin_obj);
     assert_pin_free(data_pin);
@@ -129,7 +129,7 @@ STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(audiobusio_pdmin___exit___obj, 4, 4, 
 STATIC mp_obj_t audiobusio_pdmin_obj_record(mp_obj_t self_obj, mp_obj_t destination, mp_obj_t destination_length) {
     audiobusio_pdmin_obj_t *self = MP_OBJ_TO_PTR(self_obj);
 
-    if (MP_OBJ_IS_SMALL_INT(destination_length)) {
+    if (!MP_OBJ_IS_SMALL_INT(destination_length)) {
         mp_raise_TypeError("destination_length must be int");
     }
     uint32_t length = MP_OBJ_SMALL_INT_VALUE(destination_length);

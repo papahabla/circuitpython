@@ -273,7 +273,8 @@ static void shared_construct(audioio_audioout_obj_t* self, const mcu_pin_obj_t* 
 void common_hal_audioio_audioout_construct_from_buffer(audioio_audioout_obj_t* self,
                                                        const mcu_pin_obj_t* pin,
                                                        uint16_t* buffer,
-                                                       uint32_t len) {
+                                                       uint32_t len,
+                                                       uint8_t bytes_per_sample) {
     self->pin = pin;
     if (pin != &pin_PA02) {
         mp_raise_ValueError("Invalid pin");
@@ -285,8 +286,7 @@ void common_hal_audioio_audioout_construct_from_buffer(audioio_audioout_obj_t* s
 
     self->buffer = (uint8_t*) buffer;
     self->second_buffer = NULL;
-    // Input len is a count. Internal len is in bytes.
-    self->len = 2 * len;
+    self->len = len;
     self->frequency = 8000;
 }
 
@@ -440,6 +440,7 @@ void common_hal_audioio_audioout_play(audioio_audioout_obj_t* self, bool loop) {
     } else {
         dac_enable(MP_STATE_VM(audioout_dac_instance));
     }
+    switch_audiodma_trigger(DAC_DMAC_ID_EMPTY);
     struct dma_descriptor_config descriptor_config;
     dma_descriptor_get_config_defaults(&descriptor_config);
     if (self->bytes_per_sample == 2) {

@@ -79,16 +79,21 @@ static uint8_t sercom_index(Sercom* sercom) {
     return ((uint32_t) sercom - (uint32_t) SERCOM0) / 0x400;
 }
 
-static void dma_configure(uint8_t channel, uint8_t trigsrc) {
+static void dma_configure(uint8_t channel, uint8_t trigsrc, bool output_event) {
     system_interrupt_enter_critical_section();
     /** Select the DMA channel and clear software trigger */
     DMAC->CHID.reg = DMAC_CHID_ID(channel);
     DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;
     DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;
     DMAC->SWTRIGCTRL.reg &= (uint32_t)(~(1 << channel));
-    DMAC->CHCTRLB.reg = DMAC_CHCTRLB_LVL(DMA_PRIORITY_LEVEL_0) | \
-            DMAC_CHCTRLB_TRIGSRC(trigsrc) | \
-            DMAC_CHCTRLB_TRIGACT(DMA_TRIGGER_ACTION_BEAT);
+    uint32_t event_output_enable = 0;
+    if (output_event) {
+        event_output_enable = DMAC_CHCTRLB_EVOE;
+    }
+    DMAC->CHCTRLB.reg = DMAC_CHCTRLB_LVL(DMA_PRIORITY_LEVEL_0) |
+            DMAC_CHCTRLB_TRIGSRC(trigsrc) |
+            DMAC_CHCTRLB_TRIGACT(DMA_TRIGGER_ACTION_BEAT) |
+            event_output_enable;
     system_interrupt_leave_critical_section();
 }
 
@@ -96,7 +101,7 @@ enum status_code shared_dma_write(Sercom* sercom, const uint8_t* buffer, uint32_
     if (general_dma_tx.job_status != STATUS_OK) {
         return general_dma_tx.job_status;
     }
-    dma_configure(general_dma_tx.channel_id, sercom_index(sercom) * 2 + 2);
+    dma_configure(general_dma_tx.channel_id, sercom_index(sercom) * 2 + 2, false);
 
     // Set up TX second.
     struct dma_descriptor_config descriptor_config;
@@ -135,8 +140,8 @@ enum status_code shared_dma_read(Sercom* sercom, uint8_t* buffer, uint32_t lengt
         return general_dma_tx.job_status;
     }
 
-    dma_configure(general_dma_tx.channel_id, sercom_index(sercom) * 2 + 2);
-    dma_configure(general_dma_rx.channel_id, sercom_index(sercom) * 2 + 1);
+    dma_configure(general_dma_tx.channel_id, sercom_index(sercom) * 2 + 2, false);
+    dma_configure(general_dma_rx.channel_id, sercom_index(sercom) * 2 + 1, false);
 
     // Set up RX first.
     struct dma_descriptor_config descriptor_config;
@@ -243,4 +248,8 @@ bool allocate_block_counter() {
     tc_enable(MP_STATE_VM(audiodma_block_counter));
     tc_stop_counter(MP_STATE_VM(audiodma_block_counter));
     return true;
+}
+
+void switch_audiodma_trigger(uint8_t trigger_dmac_id) {
+    dma_configure(audio_dma.channel_id, trigger_dmac_id, true);
 }

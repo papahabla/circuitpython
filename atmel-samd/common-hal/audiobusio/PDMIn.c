@@ -40,7 +40,12 @@
 #include "shared_dma.h"
 
 void pdmin_reset(void) {
-
+    while (I2S->SYNCBUSY.reg & I2S_SYNCBUSY_ENABLE) {}
+    I2S->INTENCLR.reg = I2S_INTENCLR_MASK;
+    I2S->INTFLAG.reg = I2S_INTFLAG_MASK;
+    I2S->CTRLA.reg &= ~I2S_SYNCBUSY_ENABLE;
+    while (I2S->SYNCBUSY.reg & I2S_SYNCBUSY_ENABLE) {}
+    I2S->CTRLA.reg = I2S_CTRLA_SWRST;
 }
 
 void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
@@ -51,27 +56,25 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
                                            bool mono,
                                            uint8_t oversample) {
     self->clock_pin = clock_pin; // PA10, PA20 -> SCK0, PB11 -> SCK1
-    uint8_t clock_unit;
     if (clock_pin == &pin_PA10 || clock_pin == &pin_PA20) {
-        clock_unit = 0;
+        self->clock_unit = 0;
     } else if (clock_pin == &pin_PB11) {
-        clock_unit = 1;
+        self->clock_unit = 1;
     } else {
         mp_raise_ValueError("Invalid clock pin");
     }
 
     self->data_pin = data_pin; // PA07, PA19 -> SD0, PA08, PB16 -> SD1
 
-    uint8_t serializer;
     if (data_pin == &pin_PA07 || data_pin == &pin_PA19) {
-        serializer = 0;
+        self->serializer = 0;
     } else if (data_pin == &pin_PA08
         #ifdef PB16
         || data_pin == &pin_PB16) {
         #else
         ) {
         #endif
-        serializer = 1;
+        self->serializer = 1;
     } else {
         mp_raise_ValueError("Invalid data pin");
     }
@@ -88,21 +91,23 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
         mp_raise_NotImplementedError("");
     }
 
+    // TODO(tannewt): Use the DPLL to get a more precise sampling rate.
     // DFLL -> GCLK (/600 for 8khz, /300 for 16khz and /150 for 32khz) -> DPLL (*(63 + 1)) -> GCLK ( / 10) -> 512khz
+
+    // For now sample at 8mhz (GCLK3) / 15 ~= 8333 khz
 
     i2s_init(&self->i2s_instance, I2S);
     struct i2s_clock_unit_config config_clock_unit;
     i2s_clock_unit_get_config_defaults(&config_clock_unit);
-    config_clock_unit.clock.gclk_src = GCLK_GENERATOR_5;
+    config_clock_unit.clock.gclk_src = GCLK_GENERATOR_3;
 
     config_clock_unit.clock.mck_src = I2S_MASTER_CLOCK_SOURCE_GCLK;
     config_clock_unit.clock.mck_out_enable = false;
-    config_clock_unit.clock.mck_out_div = 2;
 
     config_clock_unit.clock.sck_src = I2S_SERIAL_CLOCK_SOURCE_MCKDIV;
-    config_clock_unit.clock.sck_div = 4;
+    config_clock_unit.clock.sck_div = 15;
 
-    config_clock_unit.frame.number_slots = 1;
+    config_clock_unit.frame.number_slots = 2;
     config_clock_unit.frame.slot_size = I2S_SLOT_SIZE_32_BIT;
     config_clock_unit.frame.data_delay = I2S_DATA_DELAY_0;
 
@@ -112,26 +117,29 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
     // Mux is always the same.
     config_clock_unit.sck_pin.mux = 6L;
     config_clock_unit.fs_pin.enable = false;
-    i2s_clock_unit_set_config(&i2s_instance, clock_unit, &config_clock_unit);
+    if (i2s_clock_unit_set_config(&self->i2s_instance, self->clock_unit, &config_clock_unit) != STATUS_OK) {
+        while(true) {}
+    }
 
     struct i2s_serializer_config config_serializer;
     i2s_serializer_get_config_defaults(&config_serializer);
-    config_serializer.clock_unit = clock_unit;
+    config_serializer.clock_unit = self->clock_unit;
     config_serializer.mode = I2S_SERIALIZER_RECEIVE;
     config_serializer.data_size = I2S_DATA_SIZE_32BIT;
     config_serializer.data_pin.gpio = self->data_pin->pin;
     // Mux is always the same.
     config_serializer.data_pin.mux = 6L;
     config_serializer.data_pin.enable = true;
-    i2s_serializer_set_config(&i2s_instance, I2S_SERIALIZER_1,
-            &config_serializer);
-    i2s_enable(&i2s_instance);
-    i2s_clock_unit_enable(&i2s_instance, clock_unit);
-    i2s_serializer_enable(&i2s_instance, serializer);
+    if (i2s_serializer_set_config(&self->i2s_instance, self->serializer,
+            &config_serializer) != STATUS_OK) {
+                while(true) {}
+            }
+    i2s_enable(&self->i2s_instance);
 }
 
 void common_hal_audiobusio_pdmin_deinit(audiobusio_pdmin_obj_t* self) {
-
+    i2s_disable(&self->i2s_instance);
+    i2s_reset(&self->i2s_instance);
 }
 
 // Algorithm from https://en.wikipedia.org/wiki/Hamming_weight
@@ -159,7 +167,9 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     // We allocate two 256 byte buffers on the stack to use for double buffering.
     // Our oversample rate is 64 (bits) so each buffer produces 32 samples.
     uint32_t first_buffer[64];
+    first_buffer[0] = 0xdeadbeef;
     uint32_t second_buffer[64];
+    second_buffer[0] = 0xdeadbeef;
 
     COMPILER_ALIGNED(16) DmacDescriptor second_descriptor;
 
@@ -167,8 +177,8 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     struct dma_descriptor_config descriptor_config;
     dma_descriptor_get_config_defaults(&descriptor_config);
     descriptor_config.beat_size = DMA_BEAT_SIZE_WORD;
-	descriptor_config.step_selection = DMA_STEPSEL_SRC;
-	descriptor_config.source_address = (uint32_t)&CONF_I2S_MODULE->DATA[self->serializer];
+    descriptor_config.step_selection = DMA_STEPSEL_SRC;
+    descriptor_config.source_address = (uint32_t)&I2S->DATA[self->serializer];
     descriptor_config.src_increment_enable = false;
     // Block transfer count is the number of beats per block (aka descriptor).
     // In this case there are two bytes per beat so divide the length by two.
@@ -192,17 +202,24 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
             block_transfer_count = 2 * (length - 32);
         }
         descriptor_config.block_transfer_count = block_transfer_count;
-        descriptor_config.source_address = ((uint32_t) second_buffer + sizeof(uint32_t) * 64);
+        descriptor_config.destination_address = ((uint32_t) second_buffer + sizeof(uint32_t) * block_transfer_count);
         if (length > 64) {
             descriptor_config.next_descriptor_address = ((uint32_t)audio_dma.descriptor);
         } else {
             descriptor_config.next_descriptor_address = 0;
         }
         dma_descriptor_create(&second_descriptor, &descriptor_config);
-        dma_start_transfer_job(&audio_dma);
     }
 
+    switch_audiodma_trigger(I2S_DMAC_ID_RX_0 + self->serializer);
+
+    if (dma_start_transfer_job(&audio_dma) != STATUS_OK) {
+        while(true) {}
+    }
     tc_start_counter(MP_STATE_VM(audiodma_block_counter));
+    i2s_clock_unit_enable(&self->i2s_instance, self->clock_unit);
+    i2s_serializer_enable(&self->i2s_instance, self->serializer);
+    I2S->DATA[1].reg = I2S->DATA[1].reg;
 
     // Record
     uint32_t buffers_processed = 0;
@@ -225,9 +242,10 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         }
         // Decimate the last buffer
         for (uint16_t i = 0; i < descriptor->BTCNT.reg; i++) {
-            output_buffer[buffers_processed * 32 + i / 2] += hamming_weight(buffer[i]);
+            output_buffer[buffers_processed * 32 + i / 2] += hamming_weight(buffer[i]) * 4;
             total_bytes += i % 2;
         }
+        buffers_processed++;
 
         if (length - total_bytes < 32) {
             descriptor->BTCNT.reg = (length - total_bytes) * 2;
@@ -236,6 +254,10 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         }
         // Write it to the file (may or may not cause an actual write)
     }
+
+    // Turn off the I2S clock and serializer. Peripheral is still enabled.
+    i2s_serializer_disable(&self->i2s_instance, self->serializer);
+    i2s_clock_unit_disable(&self->i2s_instance, self->clock_unit);
 
     // Shutdown the DMA
     tc_stop_counter(MP_STATE_VM(audiodma_block_counter));
