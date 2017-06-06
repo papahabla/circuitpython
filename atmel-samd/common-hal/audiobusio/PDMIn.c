@@ -87,8 +87,12 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
         mp_raise_RuntimeError("Unable to allocate audio DMA block counter.");
     }
 
-    if (frequency != 16000 || bit_depth != 8 || !mono || oversample != 64) {
+    if (frequency != 8000 || bit_depth != 8 || !mono) {
         mp_raise_NotImplementedError("");
+    }
+
+    if (oversample % 32 != 0) {
+        mp_raise_ValueError("Oversample must be multiple of 32.");
     }
 
     // TODO(tannewt): Use the DPLL to get a more precise sampling rate.
@@ -117,9 +121,7 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
     // Mux is always the same.
     config_clock_unit.sck_pin.mux = 6L;
     config_clock_unit.fs_pin.enable = false;
-    if (i2s_clock_unit_set_config(&self->i2s_instance, self->clock_unit, &config_clock_unit) != STATUS_OK) {
-        while(true) {}
-    }
+    i2s_clock_unit_set_config(&self->i2s_instance, self->clock_unit, &config_clock_unit);
 
     struct i2s_serializer_config config_serializer;
     i2s_serializer_get_config_defaults(&config_serializer);
@@ -130,11 +132,10 @@ void common_hal_audiobusio_pdmin_construct(audiobusio_pdmin_obj_t* self,
     // Mux is always the same.
     config_serializer.data_pin.mux = 6L;
     config_serializer.data_pin.enable = true;
-    if (i2s_serializer_set_config(&self->i2s_instance, self->serializer,
-            &config_serializer) != STATUS_OK) {
-                while(true) {}
-            }
+    i2s_serializer_set_config(&self->i2s_instance, self->serializer, &config_serializer);
     i2s_enable(&self->i2s_instance);
+
+    self->bytes_per_sample = oversample >> 3;
 }
 
 void common_hal_audiobusio_pdmin_deinit(audiobusio_pdmin_obj_t* self) {
@@ -143,22 +144,16 @@ void common_hal_audiobusio_pdmin_deinit(audiobusio_pdmin_obj_t* self) {
 }
 
 // Algorithm from https://en.wikipedia.org/wiki/Hamming_weight
-static uint8_t hamming_weight(uint32_t word) {
-    uint32_t b0 = (word >> 0) & 0x55555555;
-    uint32_t b1 = (word >> 1) & 0x55555555;
-    uint32_t c = b0 + b1;
-    uint32_t d0 = (c >> 0) & 0x33333333;
-    uint32_t d2 = (c >> 2) & 0x33333333;
-    uint32_t e = d0 + d2;
-    uint32_t f0 = (e >> 0) & 0x0f0f0f0f;
-    uint32_t f4 = (e >> 4) & 0x0f0f0f0f;
-    uint32_t g = f0 + f4;
-    uint32_t h0 = (g >> 0) & 0x00ff00ff;
-    uint32_t h8 = (g >> 8) & 0x00ff00ff;
-    uint32_t i = h0 + h8;
-    uint32_t j0 = (i >> 0) & 0x0000ffff;
-    uint32_t j16 = (i >> 16) & 0x0000ffff;
-    return j0 + j16;
+static uint8_t hamming_weight(uint8_t word) {
+    uint8_t b0 = (word >> 0) & 0x55;
+    uint8_t b1 = (word >> 1) & 0x55;
+    uint8_t c = b0 + b1;
+    uint8_t d0 = (c >> 0) & 0x33;
+    uint8_t d2 = (c >> 2) & 0x33;
+    uint8_t e = d0 + d2;
+    uint8_t f0 = (e >> 0) & 0x0f;
+    uint8_t f4 = (e >> 4) & 0x0f;
+    return f0 + f4;
 }
 
 uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* self, uint8_t* output_buffer, uint32_t length) {
@@ -166,12 +161,17 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
 
     // We allocate two 256 byte buffers on the stack to use for double buffering.
     // Our oversample rate is 64 (bits) so each buffer produces 32 samples.
-    uint32_t first_buffer[64];
-    first_buffer[0] = 0xdeadbeef;
-    uint32_t second_buffer[64];
-    second_buffer[0] = 0xdeadbeef;
+    // TODO(tannewt): Can the compiler optimize better if we fix the size of
+    // these buffers?
+    uint8_t samples_per_buffer = 32;
+    uint16_t bytes_per_buffer = samples_per_buffer * self->bytes_per_sample;
+    uint8_t first_buffer[bytes_per_buffer];
+    uint8_t second_buffer[bytes_per_buffer];
 
     COMPILER_ALIGNED(16) DmacDescriptor second_descriptor;
+
+    uint8_t words_per_sample = self->bytes_per_sample / 4;
+    uint8_t words_per_buffer = bytes_per_buffer / 4;
 
     // Set up the DMA
     struct dma_descriptor_config descriptor_config;
@@ -182,40 +182,34 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     descriptor_config.src_increment_enable = false;
     // Block transfer count is the number of beats per block (aka descriptor).
     // In this case there are two bytes per beat so divide the length by two.
-    uint16_t block_transfer_count = 64;
-    if (length < block_transfer_count / 2) {
-        block_transfer_count = 2 * length;
+    uint16_t block_transfer_count = words_per_buffer;
+    if (length * words_per_sample < words_per_buffer) {
+        block_transfer_count = length * words_per_sample;
     }
     descriptor_config.block_transfer_count = block_transfer_count;
     descriptor_config.destination_address = ((uint32_t) first_buffer + sizeof(uint32_t) * block_transfer_count);
     descriptor_config.event_output_selection = DMA_EVENT_OUTPUT_BLOCK;
-    if (length > 32) {
+    descriptor_config.next_descriptor_address = 0;
+    if (length * words_per_sample > words_per_buffer) {
         descriptor_config.next_descriptor_address = ((uint32_t)&second_descriptor);
-    } else {
-        descriptor_config.next_descriptor_address = 0;
     }
     dma_descriptor_create(audio_dma.descriptor, &descriptor_config);
 
-    if (length > block_transfer_count * 2) {
-        block_transfer_count = 64;
-        if (length < block_transfer_count) {
-            block_transfer_count = 2 * (length - 32);
+    if (length * words_per_sample > words_per_buffer) {
+        block_transfer_count = words_per_buffer;
+        descriptor_config.next_descriptor_address = ((uint32_t)audio_dma.descriptor);
+        if (length * words_per_sample < 2 * words_per_buffer) {
+            block_transfer_count = 2 * words_per_buffer - length * words_per_sample;
+            descriptor_config.next_descriptor_address = 0;
         }
         descriptor_config.block_transfer_count = block_transfer_count;
         descriptor_config.destination_address = ((uint32_t) second_buffer + sizeof(uint32_t) * block_transfer_count);
-        if (length > 64) {
-            descriptor_config.next_descriptor_address = ((uint32_t)audio_dma.descriptor);
-        } else {
-            descriptor_config.next_descriptor_address = 0;
-        }
         dma_descriptor_create(&second_descriptor, &descriptor_config);
     }
 
     switch_audiodma_trigger(I2S_DMAC_ID_RX_0 + self->serializer);
 
-    if (dma_start_transfer_job(&audio_dma) != STATUS_OK) {
-        while(true) {}
-    }
+    dma_start_transfer_job(&audio_dma)
     tc_start_counter(MP_STATE_VM(audiodma_block_counter));
     i2s_clock_unit_enable(&self->i2s_instance, self->clock_unit);
     i2s_serializer_enable(&self->i2s_instance, self->serializer);
@@ -224,6 +218,14 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     // Record
     uint32_t buffers_processed = 0;
     uint32_t total_bytes = 0;
+
+    int32_t sum1 = 0;
+    int32_t sum2 = 0;
+    int32_t comb1_1 = 0;
+    int32_t comb1_2 = 0;
+    int32_t comb2_1 = 0;
+    int32_t comb2_2 = 0;
+    int32_t sample_average = 0;
     while (total_bytes < length) {
         // Wait for the next buffer to fill
         while (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) == buffers_processed) {
@@ -234,22 +236,49 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         if (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) != (buffers_processed + 1)) {
             break;
         }
-        uint32_t* buffer = first_buffer;
+        uint8_t* buffer = first_buffer;
         DmacDescriptor* descriptor = audio_dma.descriptor;
         if (buffers_processed % 2 == 1) {
             buffer = second_buffer;
             descriptor = &second_descriptor;
         }
         // Decimate the last buffer
-        for (uint16_t i = 0; i < descriptor->BTCNT.reg; i++) {
-            output_buffer[buffers_processed * 32 + i / 2] += hamming_weight(buffer[i]) * 4;
-            total_bytes += i % 2;
+        // A CIC filter based on: https://curiouser.cheshireeng.com/2015/01/16/pdm-in-a-tiny-cpu/
+        int32_t buffer_sum = 0;
+        uint32_t samples_gathered = descriptor->BTCNT.reg / self->words_per_sample;
+        for (uint16_t i = 0; i < samples_gathered; i++) {
+            for (uint8_t j = 0; j < self->bytes_per_sample; j++) {
+                // We use hamming weight to determine the value of each byte
+                // rather than a look up table to save memory. This is
+                // considered the first stage.
+                uint8_t one_count = hamming_weight(buffer[i * 8 + j]);
+                sum1 += one_count - (8 - one_count);
+                sum2 += sum1;
+            }
+            int tmp = sum2 - comb1_2;
+            comb1_2 = comb1_1;
+            comb1_1 = sum2;
+
+            int16_t sample = tmp - comb2_2;
+            comb2_2 = comb2_1;
+            comb2_1 = tmp;
+
+            buffer_sum += sample;
+            int16_t adjusted_sample = sample - sample_average;
+
+            // This filter gives ~12 bits of significance, four from the hamming
+            // weight sum and nine (maybe) from the second stage. So, shift away
+            // the low bits to pack it into a single unsigned byte.
+            output_buffer[total_bytes] = (adjusted_sample >> 2) + 128;
+            total_bytes++;
         }
+        sample_average = buffer_sum / samples_gathered;
+
         buffers_processed++;
 
-        if (length - total_bytes < 32) {
-            descriptor->BTCNT.reg = (length - total_bytes) * 2;
-            descriptor->DSTADDR.reg = ((uint32_t) buffer) + (length - total_bytes) * 8;
+        if (length - total_bytes < samples_per_buffer) {
+            descriptor->BTCNT.reg = (length - total_bytes) * words_per_sample;
+            descriptor->DSTADDR.reg = ((uint32_t) buffer) + (length - total_bytes) * self->bytes_per_sample;
             descriptor->DESCADDR.reg = 0;
         }
         // Write it to the file (may or may not cause an actual write)

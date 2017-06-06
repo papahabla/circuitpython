@@ -80,7 +80,7 @@ STATIC mp_obj_t audiobusio_pdmin_make_new(const mp_obj_type_t *type, size_t n_ar
     uint32_t frequency = 16000;
     uint8_t bit_depth = 8;
     bool mono = true;
-    uint8_t oversample = 64;
+    uint8_t oversample = 128;
 
     common_hal_audiobusio_pdmin_construct(self, clock_pin, data_pin, frequency, bit_depth, mono, oversample);
 

@@ -42,6 +42,7 @@ typedef struct {
     struct i2s_module i2s_instance;
     uint8_t serializer;
     uint8_t clock_unit;
+    uint8_t bytes_per_sample;
 } audiobusio_pdmin_obj_t;
 
 void pdmin_reset(void);
