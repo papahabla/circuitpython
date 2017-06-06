@@ -38,6 +38,7 @@
 #include "samd21_pins.h"
 
 #include "shared_dma.h"
+#include "tick.h"
 
 void pdmin_reset(void) {
     while (I2S->SYNCBUSY.reg & I2S_SYNCBUSY_ENABLE) {}
@@ -209,7 +210,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
 
     switch_audiodma_trigger(I2S_DMAC_ID_RX_0 + self->serializer);
 
-    dma_start_transfer_job(&audio_dma)
+    dma_start_transfer_job(&audio_dma);
     tc_start_counter(MP_STATE_VM(audiodma_block_counter));
     i2s_clock_unit_enable(&self->i2s_instance, self->clock_unit);
     i2s_serializer_enable(&self->i2s_instance, self->serializer);
@@ -226,6 +227,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     int32_t comb2_1 = 0;
     int32_t comb2_2 = 0;
     int32_t sample_average = 0;
+    uint64_t start_ticks = ticks_ms;
     while (total_bytes < length) {
         // Wait for the next buffer to fill
         while (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) == buffers_processed) {
@@ -236,6 +238,12 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         if (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) != (buffers_processed + 1)) {
             break;
         }
+        // Throw away the first ~20ms of data because thats during mic start up.
+        if (ticks_ms - start_ticks < 21) {
+            mp_printf(&mp_plat_print, "skipping buffer\n");
+            buffers_processed++;
+            continue;
+        }
         uint8_t* buffer = first_buffer;
         DmacDescriptor* descriptor = audio_dma.descriptor;
         if (buffers_processed % 2 == 1) {
@@ -245,13 +253,13 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         // Decimate the last buffer
         // A CIC filter based on: https://curiouser.cheshireeng.com/2015/01/16/pdm-in-a-tiny-cpu/
         int32_t buffer_sum = 0;
-        uint32_t samples_gathered = descriptor->BTCNT.reg / self->words_per_sample;
+        int32_t samples_gathered = descriptor->BTCNT.reg / words_per_sample;
         for (uint16_t i = 0; i < samples_gathered; i++) {
             for (uint8_t j = 0; j < self->bytes_per_sample; j++) {
                 // We use hamming weight to determine the value of each byte
                 // rather than a look up table to save memory. This is
                 // considered the first stage.
-                uint8_t one_count = hamming_weight(buffer[i * 8 + j]);
+                int16_t one_count = hamming_weight(buffer[i * self->bytes_per_sample + j]);
                 sum1 += one_count - (8 - one_count);
                 sum2 += sum1;
             }
@@ -265,6 +273,9 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
 
             buffer_sum += sample;
             int16_t adjusted_sample = sample - sample_average;
+            if (i == 0 || i == samples_gathered - 1) {
+                mp_printf(&mp_plat_print, "sample: %d\n", adjusted_sample);
+            }
 
             // This filter gives ~12 bits of significance, four from the hamming
             // weight sum and nine (maybe) from the second stage. So, shift away
@@ -272,7 +283,10 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
             output_buffer[total_bytes] = (adjusted_sample >> 2) + 128;
             total_bytes++;
         }
+        mp_printf(&mp_plat_print, "%d sum %d num samples\n", buffer_sum, samples_gathered);
         sample_average = buffer_sum / samples_gathered;
+        mp_printf(&mp_plat_print, "sample average: %d\n", sample_average);
+
 
         buffers_processed++;
 

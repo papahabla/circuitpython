@@ -77,7 +77,7 @@ STATIC mp_obj_t audiobusio_pdmin_make_new(const mp_obj_type_t *type, size_t n_ar
     audiobusio_pdmin_obj_t *self = m_new_obj(audiobusio_pdmin_obj_t);
     self->base.type = &audiobusio_pdmin_type;
 
-    uint32_t frequency = 16000;
+    uint32_t frequency = 8000;
     uint8_t bit_depth = 8;
     bool mono = true;
     uint8_t oversample = 128;
