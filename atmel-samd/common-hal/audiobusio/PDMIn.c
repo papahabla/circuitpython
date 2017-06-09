@@ -227,6 +227,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     int32_t comb2_1 = 0;
     int32_t comb2_2 = 0;
     int32_t sample_average = 0;
+    bool sample_average_valid = false;
     uint64_t start_ticks = ticks_ms;
     while (total_bytes < length) {
         // Wait for the next buffer to fill
@@ -238,8 +239,8 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         if (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) != (buffers_processed + 1)) {
             break;
         }
-        // Throw away the first ~20ms of data because thats during mic start up.
-        if (ticks_ms - start_ticks < 21) {
+        // Throw away the first ~10ms of data because thats during mic start up.
+        if (ticks_ms - start_ticks < 10) {
             mp_printf(&mp_plat_print, "skipping buffer\n");
             buffers_processed++;
             continue;
@@ -273,9 +274,6 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
 
             buffer_sum += sample;
             int16_t adjusted_sample = sample - sample_average;
-            if (i == 0 || i == samples_gathered - 1) {
-                mp_printf(&mp_plat_print, "sample: %d\n", adjusted_sample);
-            }
 
             // This filter gives ~12 bits of significance, four from the hamming
             // weight sum and nine (maybe) from the second stage. So, shift away
@@ -283,10 +281,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
             output_buffer[total_bytes] = (adjusted_sample >> 2) + 128;
             total_bytes++;
         }
-        mp_printf(&mp_plat_print, "%d sum %d num samples\n", buffer_sum, samples_gathered);
         sample_average = buffer_sum / samples_gathered;
-        mp_printf(&mp_plat_print, "sample average: %d\n", sample_average);
-
 
         buffers_processed++;
 
