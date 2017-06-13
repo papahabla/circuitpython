@@ -157,23 +157,10 @@ static uint8_t hamming_weight(uint8_t word) {
     return f0 + f4;
 }
 
-uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* self, uint8_t* output_buffer, uint32_t length) {
-    // Write the wave file header.
-
-    // We allocate two 256 byte buffers on the stack to use for double buffering.
-    // Our oversample rate is 64 (bits) so each buffer produces 32 samples.
-    // TODO(tannewt): Can the compiler optimize better if we fix the size of
-    // these buffers?
-    uint8_t samples_per_buffer = 32;
-    uint16_t bytes_per_buffer = samples_per_buffer * self->bytes_per_sample;
-    uint8_t first_buffer[bytes_per_buffer];
-    uint8_t second_buffer[bytes_per_buffer];
-
-    COMPILER_ALIGNED(16) DmacDescriptor second_descriptor;
-
-    uint8_t words_per_sample = self->bytes_per_sample / 4;
-    uint8_t words_per_buffer = bytes_per_buffer / 4;
-
+static void setup_dma(audiobusio_pdmin_obj_t* self, uint32_t length,
+        DmacDescriptor* second_descriptor,
+        uint8_t words_per_buffer, uint8_t words_per_sample,
+        uint8_t* first_buffer, uint8_t* second_buffer) {
     // Set up the DMA
     struct dma_descriptor_config descriptor_config;
     dma_descriptor_get_config_defaults(&descriptor_config);
@@ -192,7 +179,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     descriptor_config.event_output_selection = DMA_EVENT_OUTPUT_BLOCK;
     descriptor_config.next_descriptor_address = 0;
     if (length * words_per_sample > words_per_buffer) {
-        descriptor_config.next_descriptor_address = ((uint32_t)&second_descriptor);
+        descriptor_config.next_descriptor_address = ((uint32_t)second_descriptor);
     }
     dma_descriptor_create(audio_dma.descriptor, &descriptor_config);
 
@@ -205,16 +192,51 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         }
         descriptor_config.block_transfer_count = block_transfer_count;
         descriptor_config.destination_address = ((uint32_t) second_buffer + sizeof(uint32_t) * block_transfer_count);
-        dma_descriptor_create(&second_descriptor, &descriptor_config);
+        dma_descriptor_create(second_descriptor, &descriptor_config);
     }
 
     switch_audiodma_trigger(I2S_DMAC_ID_RX_0 + self->serializer);
+}
 
+void start_dma(audiobusio_pdmin_obj_t* self) {
     dma_start_transfer_job(&audio_dma);
     tc_start_counter(MP_STATE_VM(audiodma_block_counter));
     i2s_clock_unit_enable(&self->i2s_instance, self->clock_unit);
     i2s_serializer_enable(&self->i2s_instance, self->serializer);
     I2S->DATA[1].reg = I2S->DATA[1].reg;
+}
+
+void stop_dma(audiobusio_pdmin_obj_t* self) {
+    // Turn off the I2S clock and serializer. Peripheral is still enabled.
+    i2s_serializer_disable(&self->i2s_instance, self->serializer);
+    i2s_clock_unit_disable(&self->i2s_instance, self->clock_unit);
+
+    // Shutdown the DMA
+    tc_stop_counter(MP_STATE_VM(audiodma_block_counter));
+    dma_abort_job(&audio_dma);
+}
+
+uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* self, uint8_t* output_buffer, uint32_t length) {
+    // Write the wave file header.
+
+    // We allocate two 256 byte buffers on the stack to use for double buffering.
+    // Our oversample rate is 64 (bits) so each buffer produces 32 samples.
+    // TODO(tannewt): Can the compiler optimize better if we fix the size of
+    // these buffers?
+    uint8_t samples_per_buffer = 32;
+    uint16_t bytes_per_buffer = samples_per_buffer * self->bytes_per_sample;
+    uint8_t first_buffer[bytes_per_buffer];
+    uint8_t second_buffer[bytes_per_buffer];
+
+    COMPILER_ALIGNED(16) DmacDescriptor second_descriptor;
+
+    uint8_t words_per_sample = self->bytes_per_sample / 4;
+    uint8_t words_per_buffer = bytes_per_buffer / 4;
+
+    setup_dma(self, length, &second_descriptor, words_per_buffer,
+        words_per_sample, first_buffer, second_buffer);
+
+    start_dma(self);
 
     // Record
     uint32_t buffers_processed = 0;
@@ -275,13 +297,19 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
             buffer_sum += sample;
             int16_t adjusted_sample = sample - sample_average;
 
-            // This filter gives ~12 bits of significance, four from the hamming
-            // weight sum and nine (maybe) from the second stage. So, shift away
-            // the low bits to pack it into a single unsigned byte.
-            output_buffer[total_bytes] = (adjusted_sample >> 2) + 128;
-            total_bytes++;
+            // Theres a large DC offset so we need to wait one buffer's worth
+            // before we start recording samples.
+            if (sample_average_valid) {
+                // This filter gives ~12 bits of significance, four from the
+                // hamming weight sum and nine (maybe) from the second stage.
+                // So, shift away the low bits to pack it into a single unsigned
+                // byte.
+                output_buffer[total_bytes] = (adjusted_sample >> 4) + 128;
+                total_bytes++;
+            }
         }
         sample_average = buffer_sum / samples_gathered;
+        sample_average_valid = true;
 
         buffers_processed++;
 
@@ -293,13 +321,7 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         // Write it to the file (may or may not cause an actual write)
     }
 
-    // Turn off the I2S clock and serializer. Peripheral is still enabled.
-    i2s_serializer_disable(&self->i2s_instance, self->serializer);
-    i2s_clock_unit_disable(&self->i2s_instance, self->clock_unit);
-
-    // Shutdown the DMA
-    tc_stop_counter(MP_STATE_VM(audiodma_block_counter));
-    dma_abort_job(&audio_dma);
+    stop_dma(self);
 
     // Flush the file
     return total_bytes;
