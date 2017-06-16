@@ -241,16 +241,19 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
     // Record
     uint32_t buffers_processed = 0;
     uint32_t total_bytes = 0;
+    uint64_t start_ticks = ticks_ms;
 
+    // CIC filter variables
     int32_t sum1 = 0;
     int32_t sum2 = 0;
     int32_t comb1_1 = 0;
     int32_t comb1_2 = 0;
     int32_t comb2_1 = 0;
     int32_t comb2_2 = 0;
-    int32_t sample_average = 0;
-    bool sample_average_valid = false;
-    uint64_t start_ticks = ticks_ms;
+    int32_t dc_alpha = 31500;
+    int32_t dc_beta = (1LL<<15) - dc_alpha - 48; // alpha+beta=1.0, -64 compensates for some apparent rounding errors
+    int32_t dc_state = 0;
+
     while (total_bytes < length) {
         // Wait for the next buffer to fill
         while (tc_get_count_value(MP_STATE_VM(audiodma_block_counter)) == buffers_processed) {
@@ -275,41 +278,45 @@ uint32_t common_hal_audiobusio_pdmin_record_to_buffer(audiobusio_pdmin_obj_t* se
         }
         // Decimate the last buffer
         // A CIC filter based on: https://curiouser.cheshireeng.com/2015/01/16/pdm-in-a-tiny-cpu/
-        int32_t buffer_sum = 0;
         int32_t samples_gathered = descriptor->BTCNT.reg / words_per_sample;
         for (uint16_t i = 0; i < samples_gathered; i++) {
             for (uint8_t j = 0; j < self->bytes_per_sample; j++) {
                 // We use hamming weight to determine the value of each byte
                 // rather than a look up table to save memory. This is
                 // considered the first stage.
-                int16_t one_count = hamming_weight(buffer[i * self->bytes_per_sample + j]);
+                int8_t one_count = hamming_weight(buffer[i * self->bytes_per_sample + j]);
                 sum1 += one_count - (8 - one_count);
                 sum2 += sum1;
             }
-            int tmp = sum2 - comb1_2;
+
+            // Two stage comb filtering
+            int32_t tmp = sum2 - comb1_2;
             comb1_2 = comb1_1;
             comb1_1 = sum2;
 
-            int16_t sample = tmp - comb2_2;
+            int32_t sample = tmp - comb2_2;
             comb2_2 = comb2_1;
             comb2_1 = tmp;
 
-            buffer_sum += sample;
-            int16_t adjusted_sample = sample - sample_average;
+            // Simple integer low-pass filter subtracted from the signal for DC removal
+            dc_state = ((dc_state * dc_alpha) + (sample * dc_beta)) >> 15; 
+            sample -= dc_state; // remove DC
 
-            // Theres a large DC offset so we need to wait one buffer's worth
-            // before we start recording samples.
-            if (sample_average_valid) {
-                // This filter gives ~12 bits of significance, four from the
-                // hamming weight sum and nine (maybe) from the second stage.
-                // So, shift away the low bits to pack it into a single unsigned
-                // byte.
-                output_buffer[total_bytes] = (adjusted_sample >> 4) + 128;
-                total_bytes++;
+            // Shift 14bit signal down to ~8bit range - this is a tradeoff 
+            // between distortion and loudness - the amount of shift could make
+            // for a nice user adjustable gain control (e.g. low=4, med=2, high=0)
+            sample >>= 2;
+            // Saturate to prevent overflow/wrapping
+            if (sample > 127) {
+                sample = 127;
             }
+            if (sample < -128) {
+                sample = -128;
+            }
+            // Store sample as 8bit unsigned sample data
+            output_buffer[total_bytes] = sample + 128;
+            total_bytes++;
         }
-        sample_average = buffer_sum / samples_gathered;
-        sample_average_valid = true;
 
         buffers_processed++;
 
